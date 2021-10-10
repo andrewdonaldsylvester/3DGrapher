@@ -1,0 +1,673 @@
+<!doctype html>
+<html>
+<body>
+<label for="equation">f(x) = </label>
+<input type="text" id="equation" onkeyup="graph_function()"/>
+
+<!--<label for="x value">x = </label>-->
+<!--<input type="text" id="x value"/>-->
+
+<button onclick = "graph_function()">Graph</button>
+
+<canvas width = "900" height = "900" id = "my_Canvas"></canvas>
+
+
+
+<script>
+    var function_input = document.getElementById('equation');
+    // var x_value_input = document.getElementById('x value');
+
+    // var test_equation = "x**2 -3^3 + 2.5x - .3 / (x-2)*3";
+
+    // tokens: VAR, CONST, PLUS, MINUS, TIMES, DIV, POW, L_PAREN, R_PAREN
+
+    // x -> VAR
+    // 0123456789 -> search ahead until you get a non digit char, entire string -> NUM
+    // + -> PLUS
+    // - -> MINUS
+    // * -> look ahead 1, if it isnt *, then -> TIMES
+    // ** -> POW
+    // ^ -> POW
+    // / -> DIV
+    // ( -> L_PAREN
+    // ) -> R_PAREN
+    // else: error
+
+    function tokenize(eq) {
+        var eq_tokens = [];
+
+        var i = 0;
+        while (i < eq.length) {
+            switch (eq.charAt(i)) {
+                case ' ':
+                    i++;
+                    break;
+
+                case 'x': case 'X':
+                    // 2x -> 2*x, )x -> )*x, xx -> x*x
+                    if (eq_tokens.length > 0) {
+                        var prev_token_type = eq_tokens[eq_tokens.length - 1].token;
+                        if (prev_token_type == "NUM" || prev_token_type == "VAR" || prev_token_type == "R_PAREN") {
+                            eq_tokens.push({
+                                token: "TIMES",
+                                value: "*"
+                            });
+                        }
+                    }
+
+                    eq_tokens.push({
+                        token: 'VAR',
+                        value: 'x'
+                    });
+                    i++;
+                    break;
+
+                case '.': case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9':
+                    // x8 -> x**8, )4 -> )**4, 8 8 -> 8*8
+                    var number = eq.charAt(i);
+
+                    var has_decimal = false;
+                    if (eq.charAt(i) == '.') {
+                        has_decimal = true;
+                    }
+
+                    var peek = 1;
+                    while (i + peek < eq.length) {
+                        if ('0123456789'.includes(eq.charAt(i + peek))) {
+                            number += eq.charAt(i + peek);
+                        } else if (eq.charAt(i + peek) == '.') {
+                            if (has_decimal) {
+                                return {has_error: true, tokens: eq_tokens};
+                            } else {
+                                has_decimal = true;
+                                number += eq.charAt(i + peek);
+                            }
+                        } else {
+                            break;
+                        }
+                        peek++;
+                    }
+
+                    if (eq_tokens.length > 0) {
+                        var prev_token_type = eq_tokens[eq_tokens.length - 1].token;
+                        if (prev_token_type == "NUM" || prev_token_type == "R_PAREN") {
+                            eq_tokens.push({
+                                token: "TIMES",
+                                value: "*"
+                            });
+                        } else if (prev_token_type == "VAR") {
+                            eq_tokens.push({
+                                token: "TIMES",
+                                value: "*"
+                            });
+                        }
+                    }
+
+                    if (has_decimal) {
+                        eq_tokens.push({
+                            token: 'NUM',
+                            value: parseFloat(number)
+                        })
+                    } else {
+                        eq_tokens.push({
+                            token: 'NUM',
+                            value: parseInt(number)
+                        })
+                    }
+
+                    i += peek;
+                    break;
+
+                case ('*'):
+                    if (eq.charAt(i + 1) == '*') {
+                        eq_tokens.push({
+                            token: 'POW',
+                            value: '**'
+                        });
+                        i++;
+                    } else {
+                        eq_tokens.push({
+                            token: 'TIMES',
+                            value: '*'
+                        });
+                    }
+                    i++;
+                    break;
+
+
+                case ('+'):
+                    eq_tokens.push({
+                        token: 'PLUS',
+                        value: '+'
+                    });
+                    i++;
+                    break;
+
+                case ('-'):
+                    // add in thing that accounts for both - and -1*value
+                    eq_tokens.push({
+                        token: 'MINUS',
+                        value: '-'
+                    });
+                    i++;
+                    break;
+
+                case ('/'):
+                    eq_tokens.push({
+                        token: 'DIV',
+                        value: '/'
+                    });
+                    i++;
+                    break;
+
+                case ('^'):
+                    eq_tokens.push({
+                        token: 'POW',
+                        value: '**'
+                    });
+                    i++;
+                    break;
+
+                case ('('):
+                    if (eq_tokens.length > 0) {
+                        var prev_token_type = eq_tokens[eq_tokens.length - 1].token;
+                        if (prev_token_type == "NUM" || prev_token_type == "VAR" || prev_token_type == "R_PAREN") {
+                            eq_tokens.push({
+                                token: "TIMES",
+                                value: "*"
+                            });
+                        }
+                    }
+
+                    eq_tokens.push({
+                        token: 'L_PAREN',
+                        value: '('
+                    });
+                    i++;
+                    break;
+
+                case (')'):
+                    eq_tokens.push({
+                        token: 'R_PAREN',
+                        value: ')'
+                    });
+                    i++;
+                    break;
+
+                default:
+                    return {has_error: true, tokens: eq_tokens};
+
+            }
+        }
+
+        return {has_error: false, tokens: eq_tokens};
+    }
+
+    function pemdas(tokens) {
+
+        // P - Parens
+
+        var i = 0;
+
+        do {
+            var l_paren_count = 0;
+            var paren_running_count = 0;
+            var l_paren_index = -1;
+            var r_paren_index = -1;
+
+            while (i < tokens.length) {
+                if (tokens[i].token == "L_PAREN") {
+                    if (l_paren_index == -1) {
+                        l_paren_index = i;
+                    }
+
+                    l_paren_count++;
+                    paren_running_count++;
+
+                } else if (tokens[i].token == "R_PAREN") {
+
+                    paren_running_count--;
+
+                    if (paren_running_count == 0) {
+                        r_paren_index = i;
+                    }
+                }
+                i++;
+            }
+
+            if (l_paren_count == 0) {
+                break;
+            } else {
+                if (paren_running_count != 0) {
+                    return 0;
+                }
+                var paren_expression = tokens.splice(l_paren_index, r_paren_index - l_paren_index + 1);
+                paren_expression.shift();
+                paren_expression.pop();
+                tokens.splice(l_paren_index, 0, {
+                    token: "NUM",
+                    value: pemdas(paren_expression)});
+            }
+        } while (l_paren_count > 0);
+
+
+
+
+        i = 0;
+        exponents:
+            while (i < tokens.length) {
+
+                i = 0;
+
+                while (i < tokens.length) {
+                    if (tokens[i].token == "POW") {
+                        tokens.splice(i - 1, 3, {
+                            token: "NUM",
+                            value: Math.pow(tokens[i - 1].value, tokens[i + 1].value)
+                        });
+                        break;
+                    }
+
+                    i++;
+                }
+
+                if (i >= tokens.length - 1) {
+                    break exponents;
+                }
+            }
+
+        i = 0;
+        multiplication:
+            while (i < tokens.length) {
+                i = 0;
+
+                while (i < tokens.length) {
+                    if (tokens[i].token == "TIMES") {
+                        tokens.splice(i - 1, 3, {
+                            token: "NUM",
+                            value: tokens[i - 1].value * tokens[i + 1].value
+                        });
+                        break;
+                    }
+
+                    i++;
+                }
+
+                if (i >= tokens.length - 1) {
+                    break multiplication;
+                }
+            }
+
+        i = 0;
+        division:
+            while (i < tokens.length) {
+                i = 0;
+
+                while (i < tokens.length) {
+                    if (tokens[i].token == "DIV") {
+                        tokens.splice(i - 1, 3, {
+                            token: "NUM",
+                            value: tokens[i - 1].value / tokens[i + 1].value
+                        });
+                        break;
+                    }
+
+                    i++;
+                }
+
+                if (i >= tokens.length - 1) {
+                    break division;
+                }
+            }
+
+
+        i = 0;
+        addition:
+            while (i < tokens.length) {
+                i = 0;
+
+                while (i < tokens.length) {
+                    if (tokens[i].token == "PLUS") {
+                        tokens.splice(i - 1, 3, {
+                            token: "NUM",
+                            value: tokens[i - 1].value + tokens[i + 1].value
+                        });
+                        break;
+                    }
+
+                    i++;
+                }
+
+                if (i >= tokens.length - 1) {
+                    break addition;
+                }
+            }
+
+        i = 0;
+        subtraction:
+            while (i < tokens.length) {
+                i = 0;
+
+                while (i < tokens.length) {
+                    if (tokens[i].token == "MINUS") {
+                        tokens.splice(i - 1, 3, {
+                            token: "NUM",
+                            value: tokens[i - 1].value - tokens[i + 1].value
+                        });
+
+                        break;
+                    }
+
+                    i++;
+                }
+
+                if (i >= tokens.length - 1) {
+                    break subtraction;
+                }
+            }
+
+        if (tokens.length == 1) {
+            return tokens[0].value;
+        }
+
+        return tokens;
+    }
+
+
+    function evaluate(eq, x_value) {
+        var eq_tokenized = tokenize(eq);
+
+        if (eq_tokenized.has_error) {
+            return 0;
+        }
+
+        var tokens = eq_tokenized.tokens;
+
+        var i = 0;
+        while (i < tokens.length) {
+            if (tokens[i].token == "VAR") {
+                tokens[i] = {token: "NUM", value: x_value};
+            }
+            i++;
+        }
+
+        return pemdas(tokens);
+
+    }
+
+    // function evaluate_input_boxes() {
+    //     console.log(evaluate(function_input.value, parseFloat(x_value_input.value)));
+    // }
+
+
+    // ---------------------- Drawing
+
+  function generate_graph(f, x_min, x_max, x_increment) {
+    // add sampling of polar points
+
+    var vertices = [];
+    var indices = [];
+    var colors = [];
+
+    var vertices_width = 0;
+    var vertices_height = 0;
+
+    var color_strip_width = 1;
+
+    // increment over xy plane, adding points to vertices list
+
+    // this hits every point where y is the maximum but not when x is the maximum
+
+    for (let x = x_min; x < x_max; x += x_increment) {
+      var y = f(x);
+      vertices.push(x, y, 0);
+      colors.push(1, 0, 0);
+
+      vertices_width += 1;
+    }
+
+    // this hits the last missing point, when x and y are the maximum
+
+    var y = f(x_max);
+    vertices.push(x_max, y, 0);
+    colors.push(1, 0, 0);
+
+    vertices_width += 1;
+
+    for (let x_index = 0; x_index < vertices_width - 1; x_index++) {
+      indices.push(x_index, x_index + 1);
+    }
+
+
+    return {vertices: vertices, indices: indices, colors: colors};
+  }
+
+  /*============= Creating a canvas ======================*/
+  var canvas = document.getElementById('my_Canvas');
+  gl = canvas.getContext('experimental-webgl');
+
+  function graph_function() {
+      var test_surface = generate_graph((x) => evaluate(function_input.value, x), -16, 16, 0.1);
+
+      var vertices = test_surface.vertices;
+      var indices = test_surface.indices;
+      var colors = test_surface.colors;
+
+      // Create and store data into vertex buffer
+      var vertex_buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertex_buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+      // Create and store data into color buffer
+      var color_buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, color_buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
+
+      // Create and store data into index buffer
+      var index_buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index_buffer);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+
+      /*=================== SHADERS =================== */
+
+      var vertCode = 'attribute vec3 position;' +
+          'uniform mat4 Pmatrix;' +
+          'uniform mat4 Vmatrix;' +
+          'uniform mat4 Mmatrix;' +
+          'attribute vec3 color;' +//the color of the point
+          'varying vec3 vColor;' +
+          'void main(void) { ' +//pre-built function
+          'gl_Position = Pmatrix*Vmatrix*vec4(position, 1.);' +
+          'vColor = color;' +
+          '}';
+
+      var fragCode = 'precision mediump float;' +
+          'varying vec3 vColor;' +
+          'void main(void) {' +
+          'gl_FragColor = vec4(vColor, 1.);' +
+          '}';
+
+      var vertShader = gl.createShader(gl.VERTEX_SHADER);
+      gl.shaderSource(vertShader, vertCode);
+      gl.compileShader(vertShader);
+
+      var fragShader = gl.createShader(gl.FRAGMENT_SHADER);
+      gl.shaderSource(fragShader, fragCode);
+      gl.compileShader(fragShader);
+
+      var shaderprogram = gl.createProgram();
+      gl.attachShader(shaderprogram, vertShader);
+      gl.attachShader(shaderprogram, fragShader);
+      gl.linkProgram(shaderprogram);
+
+      /*======== Associating attributes to vertex shader =====*/
+      var _Pmatrix = gl.getUniformLocation(shaderprogram, "Pmatrix");
+      var _Vmatrix = gl.getUniformLocation(shaderprogram, "Vmatrix");
+      var _Mmatrix = gl.getUniformLocation(shaderprogram, "Mmatrix");
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertex_buffer);
+      var _position = gl.getAttribLocation(shaderprogram, "position");
+      gl.vertexAttribPointer(_position, 3, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(_position);
+
+      // gl.bindBuffer(gl.ARRAY_BUFFER, color_buffer);
+      var _color = gl.getAttribLocation(shaderprogram, "color");
+      gl.vertexAttribPointer(_color, 3, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(_color);
+      gl.useProgram(shaderprogram);
+
+      /*==================== MATRIX ====================== */
+
+      function get_projection(angle, a, zMin, zMax) {
+          var ang = Math.tan((angle * .5) * Math.PI / 180);//angle*.5
+          return [
+              0.5 / ang, 0, 0, 0,
+              0, 0.5 * a / ang, 0, 0,
+              0, 0, -(zMax + zMin) / (zMax - zMin), -1,
+              0, 0, (-2 * zMax * zMin) / (zMax - zMin), 0
+          ];
+      }
+
+      var proj_matrix = get_projection(40, canvas.width / canvas.height, 1, 100);
+      var mo_matrix = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+      var view_matrix = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
+      view_matrix[14] = view_matrix[14] - 8;
+
+      /*================= Mouse events ======================*/
+
+      var AMORTIZATION = 0.95;
+      var drag = false;
+      var old_x, old_y;
+      var dX = 0, dY = 0;
+      var scale = 1;
+      var camera_dist = 8;
+
+      var mouseDown = function (e) {
+          drag = true;
+          old_x = e.pageX, old_y = e.pageY;
+          e.preventDefault();
+          return false;
+      };
+
+      var mouseUp = function (e) {
+          drag = false;
+      };
+
+      var mouseMove = function (e) {
+          if (!drag) return false;
+          dX = (e.pageX - old_x) * 2 * Math.PI / canvas.width,
+              dY = (e.pageY - old_y) * 2 * Math.PI / canvas.height;
+          THETA += dX;
+          PHI += dY;
+          old_x = e.pageX, old_y = e.pageY;
+          e.preventDefault();
+      };
+
+      var mouseWheel = function (e) {
+          e.preventDefault();
+
+          // camera_dist += e.deltaY * 0.1;
+          scale -= 0.005 * e.deltaY;
+          scale = Math.max(Math.min(scale, 10), 0.01);
+      };
+
+      canvas.addEventListener("mousedown", mouseDown, false);
+      canvas.addEventListener("mouseup", mouseUp, false);
+      canvas.addEventListener("mouseout", mouseUp, false);
+      canvas.addEventListener("mousemove", mouseMove, false);
+      canvas.addEventListener("mousewheel", mouseWheel, false);
+
+      /*=========================rotation================*/
+
+      // rewrite this so that it rotates more naturally
+
+      function rotateX(m, angle) {
+          var c = Math.cos(angle);
+          var s = Math.sin(angle);
+          var mv1 = m[1], mv5 = m[5], mv9 = m[9];
+
+          m[1] = m[1] * c - m[2] * s;
+          m[5] = m[5] * c - m[6] * s;
+          m[9] = m[9] * c - m[10] * s;
+
+          m[2] = m[2] * c + mv1 * s;
+          m[6] = m[6] * c + mv5 * s;
+          m[10] = m[10] * c + mv9 * s;
+      }
+
+      function rotateY(m, angle) {
+          var c = Math.cos(angle);
+          var s = Math.sin(angle);
+          var mv0 = m[0], mv4 = m[4], mv8 = m[8];
+
+          m[0] = c * m[0] + s * m[2];
+          m[4] = c * m[4] + s * m[6];
+          m[8] = c * m[8] + s * m[10];
+
+          m[2] = c * m[2] - s * mv0;
+          m[6] = c * m[6] - s * mv4;
+          m[10] = c * m[10] - s * mv8;
+      }
+
+      /*=================== Drawing =================== */
+
+      var THETA = 0,
+          PHI = 0;
+      var time_old = 0;
+
+      var animate = function (time) {
+          var dt = time - time_old;
+
+          if (!drag) {
+              dX *= AMORTIZATION, dY *= AMORTIZATION;
+              THETA += dX, PHI += dY;
+          }
+
+          //set model matrix to I4
+
+          mo_matrix[0] = 1, mo_matrix[1] = 0, mo_matrix[2] = 0,
+              mo_matrix[3] = 0,
+
+              mo_matrix[4] = 0, mo_matrix[5] = 1, mo_matrix[6] = 0,
+              mo_matrix[7] = 0,
+
+              mo_matrix[8] = 0, mo_matrix[9] = 0, mo_matrix[10] = 1,
+              mo_matrix[11] = 0,
+
+              mo_matrix[12] = 0, mo_matrix[13] = 0, mo_matrix[14] = 0,
+              mo_matrix[15] = 1;
+
+          rotateY(mo_matrix, THETA);
+          rotateX(mo_matrix, PHI);
+
+          view_matrix[0] = scale;
+          view_matrix[5] = scale;
+          view_matrix[10] = scale;
+
+          // view_matrix[14] = -camera_dist; // This isn't the exact right way to do this, instead you should just shrink all the points by a constant
+
+          time_old = time;
+          gl.enable(gl.DEPTH_TEST);
+
+          // gl.depthFunc(gl.LEQUAL);
+
+          gl.clearColor(0.5, 0.5, 0.5, 0.9);
+          gl.clearDepth(1.0);
+          gl.viewport(0.0, 0.0, canvas.width, canvas.height);
+          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+          gl.uniformMatrix4fv(_Pmatrix, false, proj_matrix);
+          gl.uniformMatrix4fv(_Vmatrix, false, view_matrix);
+          gl.uniformMatrix4fv(_Mmatrix, false, mo_matrix);
+
+          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index_buffer);
+          gl.drawElements(gl.LINES, indices.length, gl.UNSIGNED_SHORT, 0);
+
+          window.requestAnimationFrame(animate);
+      }
+      animate(0);
+  }
+</script>
+</body>
+</html>
